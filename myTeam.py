@@ -21,6 +21,8 @@
 # For more info, see http://inst.eecs.berkeley.edu/~cs188/sp09/pacman.html
 
 import random
+import time
+
 import util
 
 from captureAgents import CaptureAgent
@@ -75,38 +77,56 @@ class ReflexCaptureAgent(CaptureAgent):
         """
         Picks among the actions with the highest Q(s,a).
         """
-        currentCapsules = game_state.get_capsules()
-        currentWalls = game_state.get_walls()
-        isWallXY = game_state.has_wall(1, 2)
-
-        foodToEat = self.get_food(game_state)
-        foodToDefend = self.get_food_you_are_defending(game_state)
-
-        capsulesToEat = self.get_capsules(game_state)
-        capsulesToDefend = self.get_capsules_you_are_defending(game_state)
+        # current_capsules = game_state.get_capsules()
+        # current_walls = game_state.get_walls()
+        # food_to_eat = self.get_food(game_state)
+        # food_to_defend = self.get_food_you_are_defending(game_state)
+        # capsules_to_eat = self.get_capsules(game_state)
+        # capsules_to_defend = self.get_capsules_you_are_defending(game_state)
 
         actions = game_state.get_legal_actions(self.index)
 
         # You can profile your evaluation time by uncommenting these lines
         # start = time.time()
         values = [self.evaluate(game_state, a) for a in actions]
-        # print 'eval time for agent %d: %.4f' % (self.index, time.time() - start)
+        # print('eval time for agent %d: %.4f' % (self.index, time.time() - start))
 
         max_value = max(values)
         best_actions = [a for a, v in zip(actions, values) if v == max_value]
 
         food_left = len(self.get_food(game_state).as_list())
 
-        #If we carry more than 5 point we will go back to our side to sum it to our score (less risk of losing them by a ghost)
-        myState = game_state.get_agent_state(self.index)
-        if food_left < 2 or (myState.is_pacman and myState.num_carrying > 5):
+        my_state = game_state.get_agent_state(self.index)
+
+        loosing_when_finish = game_state.data.timeleft < 400 and ((self.red and game_state.data.score <= 0) or
+                                                                  (not self.red and game_state.data.score >= 0))
+        if food_left <= 2 or (my_state.is_pacman and loosing_when_finish
+                              and my_state.num_carrying > abs(game_state.data.score)):
             best_dist = 9999
-            best_action = None
+            best_action = Directions.STOP
+
+            enemies = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
+            enemy_ghosts = [a for a in enemies if not a.is_pacman and a.get_position() is not None and
+                            a.scared_timer == 0]
+
+            enemy_ghosts_min_dist = None
+            if len(enemy_ghosts) > 0:
+                enemy_ghosts_dists = [self.get_maze_distance(my_state.get_position(),
+                                                             a.get_position()) for a in enemy_ghosts]
+                enemy_ghosts_min_dist = min(enemy_ghosts_dists)
+
             for action in actions:
                 successor = self.get_successor(game_state, action)
                 pos2 = successor.get_agent_position(self.index)
                 dist = self.get_maze_distance(self.start, pos2)
-                if dist < best_dist:
+
+                enemy_ghosts_future_min_dist = None
+                if len(enemy_ghosts) > 0:
+                    enemy_ghosts_future_dists = [self.get_maze_distance(pos2, a.get_position()) for a in enemy_ghosts]
+                    enemy_ghosts_future_min_dist = min(enemy_ghosts_future_dists)
+
+                if dist < best_dist and (enemy_ghosts_future_min_dist is None or enemy_ghosts_future_min_dist > 2 or
+                                         enemy_ghosts_future_min_dist > enemy_ghosts_min_dist):
                     best_action = action
                     best_dist = dist
             return best_action
@@ -149,38 +169,58 @@ class ReflexCaptureAgent(CaptureAgent):
         """
         return {'successor_score': 1.0}
 
-    # to avoid the routes that have not exit since are more risk that once who have an exit to avoid the ghost
-    def is_road_without_exit(self, game_state, conf):
+    def is_road_without_exit(self, game_state, conf, max_steps):
         actions = [Directions.NORTH, Directions.SOUTH, Directions.EAST, Directions.WEST]
         x, y = (int(conf.pos[0]), int(conf.pos[1]))
+        is_road_without_exit = self.is_road_without_exit_i(game_state, conf.direction, x, y, actions, 0, max_steps)
+        return is_road_without_exit
 
-        if conf.direction == Directions.NORTH:
-            y -= 1
-        if conf.direction == Directions.SOUTH:
-            y += 1
-        if conf.direction == Directions.EAST:
-            x += 1
-        if conf.direction == Directions.WEST:
-            x -= 1
+    def is_road_without_exit_i(self, game_state, current_direction, pos_x, pos_y, actions, steps, max_steps):
+        if steps != 0:
+            if current_direction == Directions.NORTH:
+                pos_y += 1
+            if current_direction == Directions.SOUTH:
+                pos_y -= 1
+            if current_direction == Directions.EAST:
+                pos_x += 1
+            if current_direction == Directions.WEST:
+                pos_x -= 1
 
-        directionsToTake = 0
+        directions_to_take = []
         for action in actions:
-            if action == Directions.NORTH:
-                if not game_state.has_wall(x, y-1):
-                    directionsToTake += 1
-            if action == Directions.SOUTH:
-                if not game_state.has_wall(x, y+1):
-                    directionsToTake += 1
-            if action == Directions.EAST:
-                if not game_state.has_wall(x+1, y):
-                    directionsToTake += 1
-            if action == Directions.WEST:
-                if not game_state.has_wall(x-1, y):
-                    directionsToTake += 1
+            if not action == Directions.REVERSE[current_direction]:
+                if action == Directions.NORTH:
+                    if not game_state.has_wall(pos_x, pos_y + 1):
+                        directions_to_take.append(action)
+                if action == Directions.SOUTH:
+                    if not game_state.has_wall(pos_x, pos_y - 1):
+                        directions_to_take.append(action)
+                if action == Directions.EAST:
+                    if not game_state.has_wall(pos_x + 1, pos_y):
+                        directions_to_take.append(action)
+                if action == Directions.WEST:
+                    if not game_state.has_wall(pos_x - 1, pos_y):
+                        directions_to_take.append(action)
 
-        if directionsToTake == 1:
+        if len(directions_to_take) == 0:
             return True
 
+        if steps < max_steps:
+            if len(directions_to_take) == 1:
+                return self.is_road_without_exit_i(game_state, directions_to_take[0], pos_x, pos_y,
+                                                   actions, steps + 1, max_steps)
+            if len(directions_to_take) == 2:
+                return self.is_road_without_exit_i(game_state, directions_to_take[0], pos_x, pos_y, actions, steps + 1,
+                                                   max_steps) and \
+                    self.is_road_without_exit_i(game_state, directions_to_take[1], pos_x, pos_y, actions, steps + 1,
+                                                max_steps)
+            if len(directions_to_take) == 3:
+                return self.is_road_without_exit_i(
+                    game_state, directions_to_take[0], pos_x, pos_y, actions, steps + 1, max_steps) and \
+                    self.is_road_without_exit_i(game_state, directions_to_take[1], pos_x, pos_y, actions, steps + 1,
+                                                max_steps) \
+                    and self.is_road_without_exit_i(game_state, directions_to_take[2], pos_x, pos_y, actions, steps + 1,
+                                                    max_steps)
         return False
 
 
@@ -197,23 +237,30 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         food_list = self.get_food(successor).as_list()
         features['successor_score'] = -len(food_list)  # self.getScore(successor)
 
+        capsules_to_eat = self.get_capsules(successor)
+        features['successor_score'] -= len(capsules_to_eat) * 2
+
         my_state = successor.get_agent_state(self.index)
         my_pos = my_state.get_position()
 
-        enemies = [game_state.get_agent_state(i) for i in self.get_opponents(successor)]
-        enemyGhosts = [a for a in enemies if not a.is_pacman and a.get_position() is not None and a.scared_timer == 0]
-        if len(enemyGhosts) > 0:
-            dists = [self.get_maze_distance(my_pos, a.get_position()) for a in enemyGhosts]
-            features['ghost_distance'] = min(dists)
-            if features['ghost_distance'] <= 2:
+        enemies = [successor.get_agent_state(i) for i in self.get_opponents(successor)]
+        enemy_ghosts = [a for a in enemies if not a.is_pacman and a.get_position() is not None and a.scared_timer == 0]
+        if len(enemy_ghosts) > 0:
+            dists = [self.get_maze_distance(my_pos, a.get_position()) for a in enemy_ghosts]
+            features['ghost_distance'] = min(min(dists), 5)
+            if features['ghost_distance'] <= 3:
                 features['ghost_close'] = 1
 
-                if self.is_road_without_exit(game_state, my_state.configuration):
+                if self.is_road_without_exit(successor, my_state.configuration, 20):
                     features['danger_closed_road'] = 1
 
         if len(food_list) > 0:
             min_distance = min([self.get_maze_distance(my_pos, food) for food in food_list])
             features['distance_to_food'] = min_distance
+
+            if len(capsules_to_eat) > 0:
+                min_distance_to_capsule = min([self.get_maze_distance(my_pos, capsule) for capsule in capsules_to_eat])
+                features['distance_to_capsule'] = min(min_distance_to_capsule, 5)
 
         if action == Directions.STOP:
             features['stop'] = 1
@@ -221,7 +268,8 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         return features
 
     def get_weights(self, game_state, action):
-        return {'successor_score': 10000, 'ghost_distance': -1, 'ghost_close': -100, 'distance_to_food': -10, 'danger_closed_road': -5000, 'stop': -6000}
+        return {'successor_score': 10000, 'ghost_distance': -2, 'ghost_close': -200, 'distance_to_food': -10,
+                'distance_to_capsule': -30, 'danger_closed_road': -5000, 'stop': -6000}
 
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
@@ -240,23 +288,38 @@ class DefensiveReflexAgent(ReflexCaptureAgent):
         my_pos = my_state.get_position()
 
         # Computes whether we're on defense (1) or offense (0)
-        features['on_defense'] = 1
-        if my_state.is_pacman: features['on_defense'] = 0
+        if not my_state.is_pacman:
+            features['on_defense'] = 1
 
-        # Computes distance to invaders we can see
-        enemies = [game_state.get_agent_state(i) for i in self.get_opponents(successor)]
-        invaders = [a for a in enemies if a.is_pacman and a.get_position() is not None]
-        #features['num_invaders'] = len(invaders)
-        if len(invaders) > 0:
-            features['has_invaders'] = 1
-            dists = [self.get_maze_distance(my_pos, a.get_position()) for a in invaders]
-            features['invader_distance'] = min(dists)
+        enemies_before = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
+        invaders_before = [a for a in enemies_before if a.is_pacman and a.get_position() is not None]
 
-        if action == Directions.STOP: features['stop'] = 1
+        enemies_after = [successor.get_agent_state(i) for i in self.get_opponents(successor)]
+        invaders_after = [a for a in enemies_after if a.is_pacman and a.get_position() is not None]
+
+        enemies_killed = 0
+        if len(invaders_before) > 0:
+            enemies_killed = [a for a in enemies_after if not a.is_pacman and a.get_position() == a.start.pos]
+            features['enemies_killed'] = len(enemies_killed)
+
+        if len(invaders_after) > 0:
+            dists = [self.get_maze_distance(my_pos, a.get_position()) for a in invaders_after]
+            features['invader_distance'] = min(min(dists), 5)
+        else:
+            features['invader_distance'] = 6
+
+            if enemies_killed == 0 and self.is_road_without_exit(successor, my_state.configuration, 5):
+                features['empty_closed_road'] = 1
+
+        if action == Directions.STOP:
+            features['stop'] = 1
+
         rev = Directions.REVERSE[game_state.get_agent_state(self.index).configuration.direction]
-        if action == rev: features['reverse'] = 1
+        if action == rev:
+            features['reverse'] = 1
 
         return features
 
     def get_weights(self, game_state, action):
-        return {'has_invaders': 10000, 'on_defense': 10000, 'invader_distance': -10, 'stop': -100, 'reverse': -2}
+        return {'on_defense': 10000, 'enemies_killed': 9000, 'invader_distance': -10, 'empty_closed_road': -1000,
+                'stop': -100, 'reverse': -2}
